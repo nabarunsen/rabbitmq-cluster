@@ -1,0 +1,198 @@
+kubectl apply -f - <<'_EOF'
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: rabbitmq-ha
+  name: rmq-rabbitmq-ha
+  namespace: default
+spec:
+  podManagementPolicy: OrderedReady
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rabbitmq-ha
+  serviceName: rmq-rabbitmq-ha-discovery
+  template:
+    metadata:
+      annotations:
+        checksum/config: 1b2c44d6700bf1d0c528a1dc3867f71e5a5e7c9099e15d68639ba407205c1d30
+      labels:
+        app: rabbitmq-ha
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            -
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: rabbitmq-ha
+                topologyKey: kubernetes.io/hostname
+              weight: 1
+      containers:
+        -
+          env:
+            -
+              name: MY_POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            -
+              name: RABBITMQ_USE_LONGNAME
+              value: "true"
+            -
+              name: RABBITMQ_NODENAME
+              value: rabbit@$(MY_POD_NAME).rmq-rabbitmq-ha-discovery.default.svc.cluster.local
+            -
+              name: K8S_HOSTNAME_SUFFIX
+              value: .rmq-rabbitmq-ha-discovery.default.svc.cluster.local
+            -
+              name: K8S_SERVICE_NAME
+              value: rmq-rabbitmq-ha-discovery
+            -
+              name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  key: rabbitmq-erlang-cookie
+                  name: rmq-rabbitmq-ha
+            -
+              name: RABBIT_MANAGEMENT_USER
+              valueFrom:
+                secretKeyRef:
+                  key: rabbitmq-management-username
+                  name: rmq-rabbitmq-ha
+            -
+              name: RABBIT_MANAGEMENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: rabbitmq-management-password
+                  name: rmq-rabbitmq-ha
+          image: "rabbitmq:3.7.19-alpine"
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - "-c"
+                - "wget -O - -q --header \"Authorization: Basic `echo -n \\\"$RABBIT_MANAGEMENT_USER:$RABBIT_MANAGEMENT_PASSWORD\\\" | base64`\" http://localhost:15672/api/healthchecks/node | grep -qF \"{\\\"status\\\":\\\"ok\\\"}\""
+            failureThreshold: 6
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            timeoutSeconds: 5
+          name: rabbitmq-ha
+          ports:
+            -
+              containerPort: 4369
+              name: epmd
+              protocol: TCP
+            -
+              containerPort: 5672
+              name: amqp
+              protocol: TCP
+            -
+              containerPort: 15672
+              name: http
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - "-c"
+                - "wget -O - -q --header \"Authorization: Basic `echo -n \\\"$RABBIT_MANAGEMENT_USER:$RABBIT_MANAGEMENT_PASSWORD\\\" | base64`\" http://localhost:15672/api/healthchecks/node | grep -qF \"{\\\"status\\\":\\\"ok\\\"}\""
+            failureThreshold: 6
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            -
+              mountPath: /var/lib/rabbitmq
+              name: data
+            -
+              mountPath: /etc/rabbitmq
+              name: config
+            -
+              mountPath: /etc/definitions
+              name: definitions
+              readOnly: true
+      initContainers:
+        -
+          args:
+            - "-c"
+            - |
+                set -ex
+                cp /configmap/* /etc/rabbitmq
+                echo "${RABBITMQ_ERLANG_COOKIE}" > /var/lib/rabbitmq/.erlang.cookie
+          command:
+            - sh
+          env:
+            -
+              name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            -
+              name: RABBITMQ_MNESIA_DIR
+              value: /var/lib/rabbitmq/mnesia/rabbit@$(POD_NAME).rmq-rabbitmq-ha-discovery.default.svc.cluster.local
+            -
+              name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  key: rabbitmq-erlang-cookie
+                  name: rmq-rabbitmq-ha
+          image: "busybox:1.30.1"
+          imagePullPolicy: IfNotPresent
+          name: bootstrap
+          volumeMounts:
+            -
+              mountPath: /configmap
+              name: configmap
+            -
+              mountPath: /etc/rabbitmq
+              name: config
+            -
+              mountPath: /var/lib/rabbitmq
+              name: data
+      schedulerName: stork
+      securityContext:
+        fsGroup: 101
+        runAsGroup: 101
+        runAsNonRoot: true
+        runAsUser: 100
+      serviceAccountName: rmq-rabbitmq-ha
+      terminationGracePeriodSeconds: 10
+      volumes:
+        -
+          emptyDir: {}
+          name: config
+        -
+          configMap:
+            name: rmq-rabbitmq-ha
+          name: configmap
+        -
+          name: definitions
+          secret:
+            items:
+              -
+                key: definitions.json
+                path: definitions.json
+            secretName: rmq-rabbitmq-ha
+  updateStrategy:
+    type: OnDelete
+  volumeClaimTemplates:
+    -
+      metadata:
+        annotations: ~
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 8Gi
+        storageClassName: aws-efs
+
+_EOF

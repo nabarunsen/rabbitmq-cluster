@@ -1,0 +1,1 @@
+tcp: {"5672":"default/rabbitmq-rabbitmq:5672","15672":"default/rabbitmq-rabbitmq:15672"

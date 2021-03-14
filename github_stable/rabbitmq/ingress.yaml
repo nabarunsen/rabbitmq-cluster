@@ -1,0 +1,21 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: rabbitmqing
+  namespace: rabbitmq
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "x-processed-by: $host,$proxy_add_x_forwarded_for,$hostname,$upstream_addr";
+      more_set_headers "X-REQUEST-ID: $request_id";  
+spec:
+  rules:
+  - host: rabbitmq.devopsk8test.com
+    http:
+      paths: 
+      #- path: /rabbit/(.*)
+      #- path: /
+      - backend:
+          serviceName: rabbitmq
+          servicePort: 15672
